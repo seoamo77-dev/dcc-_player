@@ -6,20 +6,19 @@ import time
 import requests
 import xml.etree.ElementTree as ET
 
-# [설정] 스트림 상태 및 타이머 관리
+# [설정] 상태 관리
 stream_names = {1: "OFF", 2: "OFF", 3: "OFF", 4: "OFF", 5: "OFF"}
 streams = {1: None, 2: None, 3: None, 4: None, 5: None}
 refresh_timers = {1: None, 2: None, 3: None, 4: None, 5: None}
 
-# 서버 접속 정보
+# 서버 및 경로 설정
 AUTH = ('id', 'pw')
 STAT_URL = "http://server_add/stat"
 base_url = "rtmp://server_add/stream/"
 
-# 레이아웃 설정
 width, height = 800, 450
 gap = 20
-RESTART_INTERVAL = 60000 # 10분
+RESTART_INTERVAL = 600  # 10분 (600초)
 
 positions = {
     1: (gap, gap),
@@ -29,24 +28,22 @@ positions = {
 }
 
 def get_server_status():
-    """서버에서 현재 입출력 중인 스트림 정보를 가져옴"""
+    """서버 실시간 입출력 상태 확인"""
     status_msg = []
     try:
-        response = requests.get(STAT_URL, auth=AUTH, timeout=1)
+        response = requests.get(STAT_URL, auth=AUTH, timeout=1.5)
         if response.status_code == 200:
             root = ET.fromstring(response.content)
             for s in root.findall(".//stream"):
                 name = s.find("name").text
-                bin = int(s.find("bw_in").text) // 1024  # kbps 변환
+                bin = int(s.find("bw_in").text) // 1024
                 bout = int(s.find("bw_out").text) // 1024
                 status_msg.append(f"[{name}] In: {bin}k / Out: {bout}k")
     except:
-        return ["서버 연결 불가 (ID/PW 또는 주소 확인)"]
-    
-    return status_msg if status_msg else ["현재 송출 중인 카메라 없음"]
+        return ["서버 상태를 불러올 수 없습니다."]
+    return status_msg if status_msg else ["송출 중인 스트림 없음"]
 
 def clear_screen():
-    """화면 지우기 및 대시보드 + 서버 상태 출력"""
     os.system('cls' if os.name == 'nt' else 'clear')
     print("="*65)
     print(" [ RTMP 통합 관제 - 실시간 모니터링 모드 ] ".center(65))
@@ -55,44 +52,49 @@ def clear_screen():
     print(f"  CH3: {stream_names[3]:<15} |  CH4: {stream_names[4]:<15}")
     print(f"  CH5(MIC): {stream_names[5]:<15}")
     print("-" * 65)
-    
-    # 서버 실시간 상태 출력 구역
-    print(" [ 실시간 서버 신호 상태 ]")
-    server_info = get_server_status()
-    for info in server_info:
+    print(" [ 서버 실시간 상태 ]")
+    for info in get_server_status():
         print(f" > {info}")
-    
     print("-" * 65)
     print(" [명령어] 채널번호 이름 (예: 1 cam01) / 채널번호 off / exit")
     print("-" * 65)
     print(" 명령 입력 >> ", end="", flush=True)
 
 def start_stream(ch, name, is_auto_refresh=False):
+    # 기존 타이머 취소
     if refresh_timers[ch]:
         refresh_timers[ch].cancel()
 
+    # 기존 프로세스 종료
     stop_stream(ch, quiet=True)
 
+    # 재시작 시 서버 세션 정리를 위한 대기
     if is_auto_refresh:
-        time.sleep(3.0) 
+        time.sleep(1.0) 
 
     stream_names[ch] = name
     clear_screen()
     
     x, y = positions.get(ch, (gap, gap))
 
-    if ch == 5: # 마이크
+    if ch == 5: # 마이크 (ffmpeg)
         command = [
             "ffmpeg", "-f", "dshow", "-i", "audio=usb마이크(USB Audio Device)",
             "-ac", "1", "-ar", "44100", "-fflags", "nobuffer", "-flags", "low_delay",
             "-f", "flv", base_url + name
         ]
-    else: # 카메라
+    else: # 카메라 (ffplay) - 사용자 CMD 옵션 100% 반영
         command = [
-            "ffplay", "-x", str(width), "-y", str(height),
-            "-fflags", "nobuffer", "-flags", "low_delay",
-            "-framedrop", "-strict", "experimental",
-            "-left", str(x), "-top", str(y),
+            "ffplay", 
+            "-x", str(width), "-y", str(height),
+            "-fflags", "nobuffer", 
+            "-flags", "low_delay",
+            "-framedrop", 
+            "-strict", "experimental",
+            "-rtmp_buffer", "0",        # 사용자가 쓰는 옵션 추가
+            "-rtmp_live", "live",       # 사용자가 쓰는 옵션 추가
+            "-left", str(x), 
+            "-top", str(y),
             "-window_title", f"CH{ch}: {name}",
             base_url + name
         ]
@@ -104,8 +106,9 @@ def start_stream(ch, name, is_auto_refresh=False):
             streams[ch] = p
             clear_screen()
     except:
-        pass
+        stream_names[ch] = "OFF"
 
+    # 10분 타이머 재설정
     if ch != 5:
         t = threading.Timer(RESTART_INTERVAL, start_stream, args=(ch, name, True))
         t.daemon = True
@@ -122,20 +125,11 @@ def stop_stream(ch, quiet=False):
         try: streams[ch].wait(timeout=1.0)
         except: streams[ch].kill()
         
-        streams[ch] = None
-        stream_names[ch] = "OFF"
-        if not quiet: clear_screen()
+    streams[ch] = None
+    stream_names[ch] = "OFF"
+    if not quiet: clear_screen()
 
 def main_menu():
-    # 5초마다 화면의 서버 정보만 갱신해주는 스레드 (입력 방해 안 함)
-    def auto_refresh_ui():
-        while True:
-            time.sleep(5)
-            # 입력 중이 아닐 때만 화면 갱신 (선택 사항, 여기서는 그냥 갱신)
-            # clear_screen() 
-
-    threading.Thread(target=auto_refresh_ui, daemon=True).start()
-
     while True:
         clear_screen()
         try:
@@ -149,16 +143,15 @@ def main_menu():
             if len(user_input) < 2: continue
 
             target_ch = int(user_input[0])
-            action = user_input[1].lower()
+            action = user_input[1]
 
-            if action == "off":
+            if action.lower() == "off":
                 stop_stream(target_ch)
             else:
-                threading.Thread(target=start_stream, args=(target_ch, user_input[1]), daemon=True).start()
+                threading.Thread(target=start_stream, args=(target_ch, action), daemon=True).start()
                 time.sleep(0.5)
         except:
             pass
 
 if __name__ == "__main__":
-
     main_menu()
