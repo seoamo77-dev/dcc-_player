@@ -12,9 +12,9 @@ streams = {1: None, 2: None, 3: None, 4: None, 5: None}
 refresh_timers = {1: None, 2: None, 3: None, 4: None, 5: None}
 
 # 서버 접속 정보
-AUTH = ('pi', 'dccl')
-STAT_URL = "http://dccl02.duckdns.org/stat"
-base_url = "rtmp://dccl02.duckdns.org/stream/"
+AUTH = ('id', 'pw')
+STAT_URL = "http://server_add/stat"
+base_url = "rtmp://server_add/stream/"
 
 # 레이아웃 설정
 width, height = 800, 450
@@ -160,4 +160,5 @@ def main_menu():
             pass
 
 if __name__ == "__main__":
+
     main_menu()
